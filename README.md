@@ -1,6 +1,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/kirklandsig/AIReceptionist?style=flat-square)](https://github.com/kirklandsig/AIReceptionist/stargazers)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=flat-square)](https://www.python.org/downloads/)
+[![Google Gemini Live](https://img.shields.io/badge/Google-Gemini%20Live-4285F4?style=flat-square)](https://ai.google.dev/gemini-api/docs/live-api)
 [![OpenAI Realtime API](https://img.shields.io/badge/OpenAI-Realtime%20API-412991?style=flat-square)](https://platform.openai.com/docs/guides/realtime)
 [![LiveKit](https://img.shields.io/badge/LiveKit-Voice%20Agent-FF6B35?style=flat-square)](https://livekit.io/)
 [![Status](https://img.shields.io/badge/status-active%20development-orange?style=flat-square)](#)
@@ -11,7 +12,7 @@
 
 # AI Receptionist -- Open Source, Self-Hosted, No Compromises
 
-A production-grade, open-source AI receptionist that answers your business phone calls using OpenAI's Realtime API -- the same speech-to-speech model that powers ChatGPT Advanced Voice. Self-hosted. No vendor lock-in. No monthly SaaS fees bleeding you dry.
+A production-grade, open-source AI receptionist that answers business phone calls using Google Gemini Live or OpenAI Realtime. Self-hosted, configurable per business, and connected to telephony through LiveKit.
 
 **This is not another cascaded STT-to-LLM-to-TTS hack.** This is a direct speech-to-speech AI voice agent built on the highest-fidelity model available today, connected to your phone system via LiveKit and SIP. It sounds like a real person because it uses the same model that makes ChatGPT's voice mode sound like a real person.
 
@@ -61,8 +62,8 @@ This project solves all of it:
 
 ## Features
 
-- Natural speech-to-speech conversations via OpenAI Realtime API
-- Inbound phone call handling via SIP/Twilio/Telnyx
+- Natural speech-to-speech conversations via Google Gemini Live or OpenAI Realtime
+- Inbound phone call handling via SIP/Twilio/Telnyx/Netelip
 - FAQ answering from configurable knowledge base
 - Call transfers to departments and specific people
 - Message taking with file-based or webhook delivery
@@ -74,9 +75,9 @@ This project solves all of it:
 ## Prerequisites
 
 - Python 3.11+
-- OpenAI API key (`sk-...`) with Realtime API access. (ChatGPT/Codex OAuth no longer authenticates Realtime as of the 2026-06-03 Beta sunset — see banner above.)
+- Google AI Studio API key for Gemini Live (default example), or an OpenAI API key for OpenAI Realtime.
 - LiveKit server ([self-hosted](https://docs.livekit.io/home/self-hosting/local/) or [LiveKit Cloud](https://cloud.livekit.io))
-- SIP trunk provider (Twilio or Telnyx) with a phone number
+- SIP trunk provider (Twilio, Telnyx, Netelip, or compatible) with a phone number
 
 ## Quick Start
 
@@ -94,7 +95,7 @@ pip install -e .
 cp .env.example .env
 # Edit .env with your LiveKit keys:
 #   LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, RECEPTIONIST_AGENT_NAME
-# Add OPENAI_API_KEY (a standard sk-... key). ChatGPT/Codex OAuth no longer works for Realtime (2026-06-03 Beta sunset).
+# Add GOOGLE_API_KEY from Google AI Studio for the default example.
 ```
 
 3. **Configure your business:**
@@ -112,7 +113,7 @@ For an end-to-end walkthrough including provider trade-offs, FXS-gateway
 The short version:
 
 - New deployments: pick a SIP trunk provider (Twilio Elastic SIP,
-  Telnyx, Signalwire), buy or port a DID to them, and point their
+  Telnyx, Netelip, Signalwire), buy or port a DID to them, and point their
   Origination URI at LiveKit's SIP endpoint
   (`sip:<project-id>.sip.livekit.cloud;transport=tcp`). Enable SIP
   REFER on the trunk so call transfers work.
@@ -122,6 +123,20 @@ The short version:
   for the LiveKit-side resource shapes.
 
 For RingCentral/RingEX reception groups that should ring the AI alongside human receptionists, see [`documentation/ringcentral-setup.md`](documentation/ringcentral-setup.md).
+
+For the simplest inbound demo, rent a native US number in LiveKit Cloud. This
+does not require a third-party SIP trunk. Follow
+[`documentation/livekit-native-phone-setup.md`](documentation/livekit-native-phone-setup.md).
+
+For the low-cost Netelip + LiveKit Build demo path, use the built-in
+provisioner and follow
+[`documentation/netelip-livekit-setup.md`](documentation/netelip-livekit-setup.md):
+
+```bash
+python -m receptionist.telephony netelip plan \
+  --number +576011234567 \
+  --sip-endpoint your-project-id.sip.livekit.cloud
+```
 
 5. **Run:**
 
@@ -139,7 +154,7 @@ Each business is defined by a YAML file in `config/businesses/`. See `example-de
 
 Key sections:
 - `business` -- name, type, timezone
-- `voice` -- OpenAI voice selection (coral, alloy, ash, ballad, echo, sage, shimmer, verse)
+- `voice` -- provider, realtime model, voice, authentication, and idle-call behavior
 - `greeting` -- what the receptionist says when answering
 - `personality` -- system prompt personality instructions
 - `hours` -- business hours per day of week
@@ -148,13 +163,33 @@ Key sections:
 - `faqs` -- question/answer pairs the receptionist draws from
 - `messages` -- how to store messages (file or webhook)
 
-### OpenAI Realtime Auth
+### Google Gemini Live (default example)
+
+Create a key in [Google AI Studio](https://aistudio.google.com/app/apikey), put
+it in `.env` as `GOOGLE_API_KEY`, and select Google in the business YAML:
+
+```yaml
+voice:
+  provider: "google"
+  voice_id: "Puck"
+  model: "gemini-3.1-flash-live-preview"
+  auth:
+    type: "api_key"
+    env: "GOOGLE_API_KEY"
+```
+
+Gemini Live supports the same receptionist function tools through LiveKit, so
+FAQ lookup, intake capture, CRM/webhook calls, transfers, and message handling
+continue to use the existing agent code.
+
+### OpenAI Realtime (alternative)
 
 Authenticate Realtime with a standard OpenAI API key (`sk-...`). The default
 `auth.type` is `api_key`, which reads `OPENAI_API_KEY` from the environment:
 
 ```yaml
 voice:
+  provider: "openai"
   voice_id: "marin"
   model: "gpt-realtime"
   auth:
@@ -166,6 +201,31 @@ voice:
 > GA Realtime API — deployments using it connect the call but the caller hears
 > silence. Use `auth.type: api_key` with a real `sk-...` key. See
 > [troubleshooting → "Realtime handshake fails with `500` / Beta API sunset"](documentation/troubleshooting.md).
+
+### EspoCRM integration
+
+The dental example uses EspoCRM as its knowledge base and appointment backend.
+Credentials remain in environment variables:
+
+```yaml
+crm:
+  provider: "espocrm"
+  enabled: true
+  base_url: "http://localhost:8080"
+  account_name: "Clinica Dental Sonrisa Demo"
+  knowledge_enabled: true
+  appointments_enabled: true
+  auth:
+    type: "basic"
+    username_env: "ESPOCRM_USERNAME"
+    password_env: "ESPOCRM_PASSWORD"
+```
+
+For production, create a restricted EspoCRM API user and use `type: api_key`
+with `ESPOCRM_API_KEY`. The agent can search published knowledge articles,
+find appointments only after matching name and phone, and create, reprogram,
+or cancel meetings. Reprogramming and cancellation require explicit caller
+confirmation.
 
 ## Message delivery channels
 

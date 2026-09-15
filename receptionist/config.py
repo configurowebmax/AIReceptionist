@@ -155,6 +155,7 @@ class VoiceIdleConfig(BaseModel):
 class VoiceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    provider: Literal["openai", "google"] = "openai"
     voice_id: str = "marin"
     model: str = "gpt-realtime"
     auth: VoiceAuth | None = None
@@ -169,6 +170,35 @@ class VoiceConfig(BaseModel):
     # account's per-minute token rate limit (the cause of mid-call dead air
     # on rate-limited tiers).
     max_response_output_tokens: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _provider_defaults(cls, data):
+        """Apply provider-specific defaults without breaking existing YAMLs."""
+        if not isinstance(data, dict) or data.get("provider", "openai") != "google":
+            return data
+
+        values = dict(data)
+        values.setdefault("voice_id", "Puck")
+        values.setdefault("model", "gemini-3.1-flash-live-preview")
+
+        auth = values.get("auth")
+        if isinstance(auth, dict) and auth.get("type") == "api_key" and "env" not in auth:
+            values["auth"] = {**auth, "env": "GOOGLE_API_KEY"}
+        return values
+
+    @model_validator(mode="after")
+    def _validate_provider_options(self) -> VoiceConfig:
+        if self.provider != "google":
+            return self
+        if self.auth is not None and not isinstance(self.auth, APIKeyVoiceAuth):
+            raise ValueError("Google Gemini Live only supports voice.auth.type: api_key")
+        if self.reasoning_effort is not None:
+            raise ValueError(
+                "voice.reasoning_effort is OpenAI-specific and cannot be used "
+                "with voice.provider: google"
+            )
+        return self
 
     @field_validator("reasoning_effort")
     @classmethod
@@ -666,14 +696,81 @@ class CalendarConfig(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Intakes — structured new-client intake by phone
+# CRM - EspoCRM REST integration
+# ---------------------------------------------------------------------------
+
+class EspoCRMAPIKeyAuth(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["api_key"]
+    api_key_env: str = "ESPOCRM_API_KEY"
+
+
+class EspoCRMBasicAuth(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["basic"]
+    username_env: str = "ESPOCRM_USERNAME"
+    password_env: str = "ESPOCRM_PASSWORD"
+
+
+EspoCRMAuth = Annotated[
+    Union[EspoCRMAPIKeyAuth, EspoCRMBasicAuth],
+    Field(discriminator="type"),
+]
+
+
+class EspoCRMConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["espocrm"] = "espocrm"
+    enabled: bool = False
+    base_url: str = "http://localhost:8080"
+    auth: EspoCRMAuth
+    account_name: str | None = None
+    knowledge_enabled: bool = True
+    appointments_enabled: bool = True
+    appointment_duration_minutes: int = Field(default=45, gt=0, le=480)
+    buffer_minutes: int = Field(default=0, ge=0, le=240)
+    buffer_placement: Literal["before", "after", "both"] = "after"
+    booking_window_days: int = Field(default=30, gt=0, le=365)
+    earliest_booking_hours_ahead: int = Field(default=2, ge=0, le=720)
+    request_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("crm.base_url must be an http or https URL")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError(
+                "crm.base_url cannot contain credentials, a query, or a fragment"
+            )
+        return value.rstrip("/")
+
+    @model_validator(mode="after")
+    def validate_capabilities(self) -> EspoCRMConfig:
+        if self.enabled and not (
+            self.knowledge_enabled or self.appointments_enabled
+        ):
+            raise ValueError(
+                "enabled CRM requires knowledge_enabled or appointments_enabled"
+            )
+        if self.enabled and self.appointments_enabled and not self.account_name:
+            raise ValueError(
+                "crm.account_name is required when appointments are enabled"
+            )
+        return self
+
+
+# ---------------------------------------------------------------------------
+# Intakes - structured new-client intake by phone
 # ---------------------------------------------------------------------------
 
 # Validation kinds Riley can apply per question. Free-text is the default;
 # "phone" / "email" / "date" / "yes_no" let the prompt nudge Riley toward
-# the right shape and let downstream tooling (sync CLI, intake email) format
-# the answer cleanly. These are advisory — the LLM is not bound to refuse
-# malformed answers, only to ask for clarification.
+# the right shape and let downstream tooling format answers consistently.
 _INTAKE_VALIDATION_KINDS = Literal["text", "phone", "email", "date", "yes_no"]
 
 
@@ -917,6 +1014,7 @@ class BusinessConfig(BaseModel):
     transcripts: TranscriptsConfig | None = None
     email: EmailConfig | None = None
     calendar: CalendarConfig | None = None
+    crm: EspoCRMConfig | None = None
     intakes: IntakesConfig | None = None
     sip: SipConfig = Field(default_factory=SipConfig)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
@@ -958,13 +1056,17 @@ class BusinessConfig(BaseModel):
                 "email channel or on_call_end/on_booking trigger is configured but "
                 "no top-level `email` section is present"
             )
-        # NEW: on_booking trigger requires calendar enabled
-        if self.email and self.email.triggers.on_booking and (
-            self.calendar is None or not self.calendar.enabled
-        ):
+        booking_enabled = bool(
+            self.calendar is not None and self.calendar.enabled
+        ) or bool(
+            self.crm is not None
+            and self.crm.enabled
+            and self.crm.appointments_enabled
+        )
+        if self.email and self.email.triggers.on_booking and not booking_enabled:
             raise ValueError(
-                "email.triggers.on_booking is true but calendar is not enabled. "
-                "Enable calendar or disable the on_booking trigger."
+                "email.triggers.on_booking is true but no appointment backend "
+                "is enabled. Enable calendar/CRM appointments or disable the trigger."
             )
         if (
             self.info_packets is not None

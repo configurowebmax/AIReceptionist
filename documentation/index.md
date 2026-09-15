@@ -1,6 +1,6 @@
 # AI Receptionist — Documentation
 
-An open-source, high-fidelity AI phone receptionist built on the **OpenAI Realtime API** (speech-to-speech) and the **LiveKit Agents SDK** (Python). Designed for small businesses — dental offices, law firms, medical clinics, and more — that need reliable inbound call handling with FAQ answering, call transfers, and message taking.
+An open-source, high-fidelity AI phone receptionist built on **Google Gemini Live or OpenAI Realtime** and the **LiveKit Agents SDK** (Python). Designed for small businesses — dental offices, law firms, medical clinics, and more — that need reliable inbound call handling with FAQ answering, CRM-backed scheduling, call transfers, and message taking.
 
 ---
 
@@ -8,10 +8,10 @@ An open-source, high-fidelity AI phone receptionist built on the **OpenAI Realti
 
 Traditional IVR systems frustrate callers with rigid menus. Human receptionists are expensive and unavailable 24/7. AI Receptionist bridges the gap:
 
-- **Natural conversation** — powered by OpenAI's speech-to-speech Realtime API, callers interact with a human-sounding voice, not a robotic menu.
+- **Natural conversation** — powered by Gemini Live or OpenAI Realtime, callers interact with a realtime voice model rather than a rigid menu.
 - **Config-driven** — every aspect of the receptionist's behavior (greeting, personality, hours, FAQs, routing) is defined in a single YAML file. No code changes needed.
 - **Multi-business** — run one deployment that serves multiple businesses, each with its own configuration and phone number.
-- **Open-source** — MIT-licensed, extensible, and built on well-supported foundations (LiveKit, OpenAI, Pydantic).
+- **Open-source** — AGPL-3.0 licensed, extensible, and built on well-supported foundations (LiveKit, Google/OpenAI, Pydantic).
 
 ---
 
@@ -24,6 +24,8 @@ Traditional IVR systems frustrate callers with rigid menus. Human receptionists 
 | [ChatGPT OAuth Setup](chatgpt-oauth-setup.md) | **Deprecated / no longer functional.** This path used a ChatGPT/Codex login token for OpenAI Realtime. The GA Realtime API no longer accepts ChatGPT/Codex OAuth tokens — use a standard OpenAI API key (`sk-...`) instead. Kept for historical reference only. |
 | [Deployment Guide](deployment-guide.md) | Step-by-step instructions for deploying with LiveKit Cloud or self-hosted LiveKit, including SIP trunk setup with Twilio and Telnyx. |
 | [Telephony Setup](telephony-setup.md) | Trade-offs between porting your number to a SIP trunk provider (Path A), bringing your own carrier via BYOC (Path B), and keeping a copper landline via an FXS gateway + on-prem PBX (Path C). |
+| [LiveKit Native Phone Setup](livekit-native-phone-setup.md) | Fast inbound demo using a native US LiveKit number, explicit agent dispatch, Gemini, and optional local EspoCRM. |
+| [Netelip + LiveKit Setup](netelip-livekit-setup.md) | Low-cost inbound demo setup, automated LiveKit trunk provisioning, and Netelip DID routing. |
 | [RingCentral + Twilio Setup](ringcentral-setup.md) | Reception-group deployment using a Twilio DID as the RingCentral external member and LiveKit SIP bridge. |
 | [Development Guide](development-guide.md) | Local development setup, running tests, code organization, and contribution guidelines. |
 | [Function Tools Reference](function-tools-reference.md) | Detailed reference for each agent function tool: `lookup_faq`, `transfer_call`, `take_message`, `get_business_hours`, calendar booking, intake tools, and info packets. |
@@ -73,7 +75,7 @@ See the [Deployment Guide](deployment-guide.md) for production setup and the [Co
 | Noise Cancellation | LiveKit Noise Cancellation Plugin | BVCTelephony (SIP) / BVC (WebRTC) noise suppression |
 | Configuration | Pydantic + PyYAML | Typed config models with validation |
 | Transport | LiveKit Server + SIP | WebRTC-based media transport with PSTN bridging |
-| SIP Trunking | Twilio / Telnyx | Connects PSTN phone numbers to LiveKit |
+| SIP Trunking | Twilio / Telnyx / Netelip | Connects PSTN phone numbers to LiveKit |
 
 ---
 

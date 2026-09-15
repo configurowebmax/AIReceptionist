@@ -17,17 +17,17 @@
 #       transfer_uri_template: "sip:{number}"
 
 business:
-  name: "Acme Dental"
-  type: "dental office"
-  timezone: "America/New_York"
+  name: "Clinica Dental Sonrisa Demo"
+  type: "clinica dental"
+  timezone: "America/Bogota"
 
 voice:
-  voice_id: "marin"              # OpenAI Realtime voice; "marin"/"cedar" are GA Realtime voices
-  model: "gpt-realtime"          # GA Realtime model; options: gpt-realtime, gpt-realtime-2, gpt-realtime-mini
-  # auth:
-  #   type: "api_key"             # reads OPENAI_API_KEY by default — REQUIRED for GA Realtime
-  #   # NOTE: oauth_codex (ChatGPT/Codex OAuth) no longer authenticates the GA
-  #   # Realtime API as of the 2026-06-03 beta sunset — use a standard sk- API key.
+  provider: "google"
+  voice_id: "Puck"
+  model: "gemini-3.1-flash-live-preview"
+  auth:
+    type: "api_key"
+    env: "GOOGLE_API_KEY"
   # idle:
   #   silence_hangup_enabled: true
   #   away_seconds: 15
@@ -36,55 +36,48 @@ voice:
   #   max_call_duration_seconds: 900
 
 languages:
-  primary: "en"
-  allowed: ["en", "es"]
+  primary: "es"
+  allowed: ["es", "en"]
 
-greeting: "Thank you for calling Acme Dental, how can I help you today?"
+greeting: "Gracias por llamar a Clinica Dental Sonrisa Demo. ¿En que puedo ayudarte?"
 
 personality: |
-  You are a warm, professional receptionist for a dental office.
-  Be concise but friendly. If you don't know something, offer to
-  take a message or transfer to the office manager.
+  Eres una recepcionista amable y profesional de una clinica dental.
+  Habla de forma clara y breve. Consulta EspoCRM antes de afirmar
+  disponibilidad, datos de una cita, seguros, ubicacion o politicas.
+  Nunca diagnostiques ni prescribas tratamientos.
 
 hours:
-  monday:    { open: "08:00", close: "17:00" }
-  tuesday:   { open: "08:00", close: "17:00" }
-  wednesday: { open: "08:00", close: "12:00" }
-  thursday:  { open: "08:00", close: "17:00" }
-  friday:    { open: "08:00", close: "15:00" }
-  saturday:  closed
+  monday:    { open: "08:00", close: "18:00" }
+  tuesday:   { open: "08:00", close: "18:00" }
+  wednesday: { open: "08:00", close: "18:00" }
+  thursday:  { open: "08:00", close: "18:00" }
+  friday:    { open: "08:00", close: "18:00" }
+  saturday:  { open: "08:00", close: "13:00" }
   sunday:    closed
 
 after_hours_message: |
-  Our office is currently closed. Our regular hours are Monday
-  through Friday. Would you like to leave a message?
+  La clinica esta cerrada en este momento. Puedo tomar un mensaje
+  para que el equipo se comunique durante el siguiente horario habil.
 
 routing:
-  - name: "Front Desk"
+  - name: "Recepcion"
     number: "+15551234567"
-    description: "General inquiries, scheduling"
-  - name: "Dr. Smith"
+    description: "Consultas generales y citas"
+  - name: "Coordinacion clinica"
     number: "+15551234568"
-    description: "Direct line for urgent dental issues"
-  - name: "Billing"
+    description: "Situaciones dentales prioritarias"
+  - name: "Facturacion"
     number: "+15551234569"
-    description: "Insurance and payment questions"
+    description: "Seguros, cobertura y pagos"
 
-faqs:
-  - question: "Do you accept my insurance?"
-    answer: "We accept most major dental insurance plans including Delta Dental, Cigna, Aetna, and MetLife. For other plans, we can verify your coverage when you call."
-  - question: "How do I schedule an appointment?"
-    answer: "I can transfer you to our front desk to schedule, or you can book online at acmedental.com/book."
-  - question: "Where are you located?"
-    answer: "We're at 123 Main Street, Suite 200, Springfield. Right next to the Springfield Mall."
-  - question: "What should I do for a dental emergency?"
-    answer: "For a dental emergency during business hours, I'll transfer you directly to Dr. Smith. After hours, please call 911 for life-threatening emergencies or visit the nearest emergency room."
+faqs: []  # Published EspoCRM Knowledge Base articles are the demo source.
 
 # Multi-channel message delivery. Remove or comment out any channels you do not need.
 messages:
   channels:
     - type: "file"
-      file_path: "./messages/acme-dental/"
+      file_path: "./messages/sonrisa-demo/"
     # - type: "email"
     #   to: ["owner@acmedental.com"]
     #   include_transcript: true
@@ -154,6 +147,22 @@ retention:
 # See documentation/google-calendar-setup.md for step-by-step instructions.
 # To enable: remove the "# " from each line below — both the # and the space.
 #
+crm:
+  provider: "espocrm"
+  enabled: true
+  base_url: "http://localhost:8080"
+  account_name: "Clinica Dental Sonrisa Demo"
+  knowledge_enabled: true
+  appointments_enabled: true
+  appointment_duration_minutes: 45
+  buffer_minutes: 0
+  booking_window_days: 30
+  earliest_booking_hours_ahead: 2
+  auth:
+    type: "basic"
+    username_env: "ESPOCRM_USERNAME"
+    password_env: "ESPOCRM_PASSWORD"
+
 # calendar:
 #   enabled: true
 #   calendar_id: "primary"                 # or a specific calendar ID

@@ -1,6 +1,6 @@
 # Function Tools Reference
 
-This document provides a detailed reference for each function tool exposed by the Receptionist agent to the OpenAI Realtime model. These tools are the mechanisms through which the AI takes actions during a phone call.
+This document provides a detailed reference for each function tool exposed by the Receptionist agent to Google Gemini Live or OpenAI Realtime.
 
 ---
 
@@ -14,6 +14,7 @@ This document provides a detailed reference for each function tool exposed by th
 - [get_business_hours](#get_business_hours)
 - [check_availability](#check_availability)
 - [book_appointment](#book_appointment)
+- [EspoCRM appointment tools](#espocrm-appointment-tools)
 - [record_intake_answer](#record_intake_answer)
 - [finalize_intake](#finalize_intake)
 - [await_keypad_entry](#await_keypad_entry)
@@ -31,19 +32,22 @@ The Receptionist agent exposes the following function tools to the OpenAI Realti
 
 | Tool | Purpose | Triggers |
 |------|---------|----------|
-| `lookup_faq` | Search configured FAQs for an answer | Caller asks a question about the business |
+| `lookup_faq` | Search configured FAQs, then published EspoCRM articles | Caller asks a question about the business |
 | `transfer_call` | Transfer the call to a department/person | Caller requests to speak with someone specific |
 | `take_message` | Record a message from the caller | Caller wants to leave a message |
 | `get_business_hours` | Check current open/closed status | Caller asks about business hours |
 | `check_availability` | Find calendar slots near a caller-requested time | Caller wants to book an appointment |
 | `book_appointment` | Book a specific previously-offered slot | Caller confirms a time |
+| `find_appointments` | Find planned CRM meetings after name/phone verification | Caller asks about an existing appointment |
+| `reschedule_appointment` | Move a verified CRM meeting to an offered slot | Caller explicitly confirms the new time |
+| `cancel_appointment` | Mark a verified CRM meeting as Not Held | Caller explicitly confirms cancellation |
 | `record_intake_answer` | Record one answer in an in-progress intake | Caller is going through a structured intake |
 | `finalize_intake` | Submit the completed intake | Riley has captured all required answers and confirmed critical fields |
 | `await_keypad_entry` | Pause intake flow and collect digits from the caller's phone keypad | Intake question is marked `input: dtmf` (digit-only fields such as phone numbers or SSNs) |
 | `send_info_packet` | Email a configured information packet to the caller (two-step: first call returns the address for read-back, second call with `destination_confirmed=true` sends) | Caller consented and confirmed an email address |
 | `end_call` | Say goodbye and hang up | Caller has clearly finished the conversation |
 
-These tools are defined as methods on the `Receptionist` class in `agent.py`, decorated with `@function_tool()`. The LiveKit Agents SDK and OpenAI Realtime API handle the serialization, invocation, and result passing automatically.
+These tools are defined as methods on the `Receptionist` class in `agent.py`, decorated with `@function_tool()`. The LiveKit Agents SDK handles serialization, invocation, and result passing for either realtime provider.
 
 ---
 
@@ -844,6 +848,28 @@ async def send_info_packet(
 3. Records success or transport failure on `CallMetadata.info_packet_sends`.
 4. Call-end summary emails include packet name, channel, destination, and
    status.
+
+---
+
+## EspoCRM Appointment Tools
+
+`check_availability` and `book_appointment` use EspoCRM when CRM
+appointments are enabled and Google Calendar is not enabled.
+
+Existing-appointment workflow:
+
+1. Collect and read back the caller's full name and callback number.
+2. Call `find_appointments`; it returns data only when both values match the
+   same Contact.
+3. For reprogramming, call `check_availability`, offer an exact returned
+   `iso=` value, obtain explicit confirmation, and call
+   `reschedule_appointment(..., confirmed=true)`.
+4. For cancellation, identify the exact returned CRM appointment ID, obtain
+   explicit confirmation, and call `cancel_appointment(..., confirmed=true)`.
+
+Cancellation preserves audit history by setting Meeting status to `Not Held`
+instead of deleting the record. IDs and appointment details must never be
+guessed.
 
 ---
 

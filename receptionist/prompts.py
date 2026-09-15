@@ -211,6 +211,43 @@ def _build_calendar_block(config: BusinessConfig) -> str:
     )
 
 
+def _build_crm_block(config: BusinessConfig) -> str:
+    crm = config.crm
+    if crm is None or not crm.enabled:
+        return ""
+
+    knowledge = ""
+    if crm.knowledge_enabled:
+        knowledge = (
+            "\nCRM KNOWLEDGE BASE:\n"
+            "For questions about insurance, location, policies, services, or "
+            "other business facts not answered verbatim in the prompt, call "
+            "lookup_faq. It searches published EspoCRM articles. Use only the "
+            "returned information; never invent a policy or coverage answer.\n"
+        )
+
+    appointments = ""
+    if crm.appointments_enabled:
+        appointments = (
+            "\nCRM APPOINTMENTS (EspoCRM):\n"
+            "You can create, find, reprogram, and cancel appointments.\n"
+            "  - New appointment: call check_availability first. Offer only "
+            "the returned iso= slots. After the caller confirms one exact "
+            "time, call book_appointment with that exact ISO value.\n"
+            "  - Existing appointment: verify the caller's full name and "
+            "callback number, then call find_appointments. Never reveal an "
+            "appointment unless both values match the CRM contact.\n"
+            "  - Reprogram: call check_availability, read the new time aloud, "
+            "wait for explicit confirmation, then call reschedule_appointment "
+            "with the CRM ID, exact offered ISO, and confirmed=true.\n"
+            "  - Cancel: state the exact appointment, wait for explicit "
+            "confirmation, then call cancel_appointment with confirmed=true.\n"
+            "  - Never fabricate a CRM ID, patient match, availability result, "
+            "or confirmation. If a CRM tool fails, take a message for staff.\n"
+        )
+    return knowledge + appointments
+
+
 def _build_dtmf_block(config: BusinessConfig) -> str:
     """Build the keypad-menu section, or empty string when DTMF is off or no
     menu announcement is configured.
@@ -257,6 +294,7 @@ def build_system_prompt(config: BusinessConfig) -> str:
 
     language_block = _build_language_block(config)
     calendar_block = _build_calendar_block(config)
+    crm_block = _build_crm_block(config)
     intakes_block = _build_intakes_block(config)
     info_packets_block = _build_info_packets_block(config)
     dtmf_block = _build_dtmf_block(config)
@@ -309,7 +347,7 @@ DEPARTMENTS YOU CAN TRANSFER TO:
 When a caller asks to be transferred, use the transfer_call tool with the department name.
 When a caller wants to leave a message, use the take_message tool to record their name, message, and callback number.
 When asked about business hours, use the get_business_hours tool.
-{calendar_block}{intakes_block}{info_packets_block}{dtmf_block}
+{calendar_block}{crm_block}{intakes_block}{info_packets_block}{dtmf_block}
 ENDING CALLS:
 When the caller has clearly finished — for example they say "goodbye",
 "thanks, bye", "that's all I needed", or you have already explained you

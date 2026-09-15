@@ -23,7 +23,7 @@ from livekit.agents import (
     AgentServer, AgentSession, Agent, RunContext,
     function_tool, room_io, get_job_context,
 )
-from livekit.plugins import openai, noise_cancellation
+from livekit.plugins import google, openai, noise_cancellation
 
 from receptionist.booking.availability import find_slots
 from receptionist.booking.models import SlotProposal
@@ -48,13 +48,11 @@ _LIVEKIT_OPERATION_TIMEOUT_SECONDS = 10.0
 
 
 def _build_realtime_model_kwargs(voice_config, api_key: str | None) -> dict:
-    """Assemble constructor kwargs for openai.realtime.RealtimeModel.
+    """Assemble constructor kwargs for the configured realtime provider.
 
-    `reasoning` and `max_response_output_tokens` are only included when the
-    business config requests them AND the installed livekit-plugins-openai
-    exposes those parameters on the relevant API surface. This keeps the call
-    working across plugin versions: older plugins (pre-1.6) silently get the
-    minimal kwargs.
+    Google Gemini Live and OpenAI Realtime expose the same LiveKit model
+    interface, but use different names for the response token limit. OpenAI
+    reasoning options remain capability-checked for plugin compatibility.
 
     Note: in 1.6 `max_response_output_tokens` is a constructor parameter on
     some builds and an `update_options()` setter on others. We pass it as a
@@ -66,8 +64,15 @@ def _build_realtime_model_kwargs(voice_config, api_key: str | None) -> dict:
     kwargs: dict = {
         "model": voice_config.model,
         "voice": voice_config.voice_id,
-        "api_key": api_key,
     }
+    if api_key is not None:
+        kwargs["api_key"] = api_key
+
+    if voice_config.provider == "google":
+        if voice_config.max_response_output_tokens is not None:
+            kwargs["max_output_tokens"] = voice_config.max_response_output_tokens
+        return kwargs
+
     supported = inspect.signature(
         openai.realtime.RealtimeModel.__init__
     ).parameters
@@ -98,6 +103,17 @@ def _build_realtime_model_kwargs(voice_config, api_key: str | None) -> dict:
         )
 
     return kwargs
+
+
+def _build_realtime_model(voice_config, api_key: str | None):
+    """Create the configured provider's LiveKit realtime model."""
+    kwargs = _build_realtime_model_kwargs(voice_config, api_key)
+    if voice_config.provider == "google":
+        return google.realtime.RealtimeModel(**kwargs)
+
+    model = openai.realtime.RealtimeModel(**kwargs)
+    _apply_realtime_options(model, voice_config)
+    return model
 
 
 def _apply_realtime_options(realtime_model, voice_config) -> None:
@@ -485,6 +501,19 @@ def _verify_tool_contract(receptionist, *, call_id: str) -> None:
     packets_cfg = getattr(config, "info_packets", None)
     if packets_cfg is not None and getattr(packets_cfg, "enabled", False):
         required.add("send_info_packet")
+    crm_cfg = getattr(config, "crm", None)
+    if (
+        crm_cfg is not None
+        and getattr(crm_cfg, "enabled", False)
+        and getattr(crm_cfg, "appointments_enabled", False)
+    ):
+        required.update({
+            "check_availability",
+            "book_appointment",
+            "find_appointments",
+            "reschedule_appointment",
+            "cancel_appointment",
+        })
     if not required:
         return
 
@@ -605,6 +634,9 @@ _TRUNCATE_LIMITS = {
     "callback_number": 50,
     "message": 4000,
     "notes": 1000,
+    "service": 200,
+    "appointment_id": 100,
+    "cancellation_reason": 500,
     "caller_email": 254,
     # Intake fields. spoken_text can be a longer answer (paragraph) so it
     # gets a more generous cap; english_summary is meant to be concise and
@@ -1287,6 +1319,9 @@ class Receptionist(Agent):
         # Lazily-constructed on first calendar tool call; reused for the rest
         # of the call so we don't pay Google's auth cost per tool invocation.
         self._calendar_client = None
+        # Lazily constructed on first CRM tool call. Credentials stay in
+        # environment variables and are never added to the model context.
+        self._crm_client = None
         # Pre-build a single Dispatcher for the call. The constructor runs a
         # filesystem-walk in resolve_failures_dir(), so reusing it across
         # take_message invocations matters when callers leave several messages.
@@ -1355,6 +1390,21 @@ class Receptionist(Agent):
     async def _get_calendar_client_async(self):
         return await asyncio.to_thread(self._get_calendar_client)
 
+    def _get_crm_client(self):
+        """Lazily construct the configured EspoCRM client for this call."""
+        if self._crm_client is None:
+            crm = self.config.crm
+            if crm is None or not crm.enabled:
+                raise RuntimeError(
+                    "CRM tools were called but crm is not enabled."
+                )
+            from receptionist.crm import EspoCRMClient
+            self._crm_client = EspoCRMClient(crm)
+        return self._crm_client
+
+    async def _get_crm_client_async(self):
+        return self._get_crm_client()
+
     def _record_offered_slots(self, iso_strings) -> None:
         """Add a batch of slot ISO strings to the bounded offer cache.
 
@@ -1402,6 +1452,19 @@ class Receptionist(Agent):
             if question.lower() in faq.question.lower() or faq.question.lower() in question.lower():
                 self.lifecycle.record_faq_answered(faq.question)
                 return faq.answer
+        crm = self.config.crm
+        if crm is not None and crm.enabled and crm.knowledge_enabled:
+            try:
+                client = await self._get_crm_client_async()
+                results = await client.search_knowledge(question)
+            except Exception:
+                logger.exception("lookup_faq: EspoCRM knowledge search failed")
+            else:
+                if results:
+                    self.lifecycle.record_faq_answered(results[0].title)
+                    return "\n\n".join(
+                        f"{item.title}: {item.body}" for item in results
+                    )
         return "No exact FAQ match found. Use your knowledge from the system prompt to answer."
 
     @function_tool()
@@ -2155,7 +2218,20 @@ class Receptionist(Agent):
         # the import cost.
         from receptionist.booking.auth import CalendarAuthError
 
-        if self.config.calendar is None or not self.config.calendar.enabled:
+        calendar_cfg = (
+            self.config.calendar
+            if self.config.calendar is not None and self.config.calendar.enabled
+            else None
+        )
+        crm_cfg = (
+            self.config.crm
+            if self.config.crm is not None
+            and self.config.crm.enabled
+            and self.config.crm.appointments_enabled
+            else None
+        )
+        appointment_cfg = calendar_cfg or crm_cfg
+        if appointment_cfg is None:
             return (
                 "I'm sorry, we don't have online booking set up. I can take a "
                 "message about your preferred time and have someone call you back."
@@ -2184,26 +2260,30 @@ class Receptionist(Agent):
                 "differently — for example, 'Tuesday April 28 at 2 PM'?"
             )
 
-        earliest = now + timedelta(hours=self.config.calendar.earliest_booking_hours_ahead)
-        latest = now + timedelta(days=self.config.calendar.booking_window_days)
+        earliest = now + timedelta(hours=appointment_cfg.earliest_booking_hours_ahead)
+        latest = now + timedelta(days=appointment_cfg.booking_window_days)
 
         # Hard constraint checks (before hitting Google)
         if parsed < earliest:
             return (
                 f"I can only book appointments at least "
-                f"{self.config.calendar.earliest_booking_hours_ahead} hours from now. "
+                f"{appointment_cfg.earliest_booking_hours_ahead} hours from now. "
                 f"The earliest I can offer is {_format_friendly_date(earliest)}."
             )
         if parsed > latest:
             return (
-                f"I can only book up to {self.config.calendar.booking_window_days} "
+                f"I can only book up to {appointment_cfg.booking_window_days} "
                 f"days out. Would you like a time sooner than "
                 f"{latest.strftime('%A, %B %d')}?"
             )
 
         try:
-            client = await self._get_calendar_client_async()
-            busy = await client.free_busy(earliest, latest)
+            if calendar_cfg is not None:
+                client = await self._get_calendar_client_async()
+                busy = await client.free_busy(earliest, latest)
+            else:
+                client = await self._get_crm_client_async()
+                busy = await client.busy_intervals(earliest, latest)
         except CalendarAuthError:
             logger.exception("check_availability: auth error")
             return (
@@ -2220,7 +2300,7 @@ class Receptionist(Agent):
         slots = find_slots(
             business_hours=self.config.hours,
             business_timezone=self.config.business.timezone,
-            calendar_config=self.config.calendar,
+            calendar_config=appointment_cfg,
             preferred_dt=parsed,
             existing_busy=busy,
             earliest=earliest,
@@ -2261,6 +2341,7 @@ class Receptionist(Agent):
         proposed_start_iso: str,
         notes: str | None = None,
         caller_email: str | None = None,
+        service: str = "Appointment",
     ) -> str:
         """Book an appointment at a previously-offered time.
 
@@ -2275,6 +2356,7 @@ class Receptionist(Agent):
                 Google sends them the standard invite email with .ics file and
                 accept/decline. Leave None if the caller didn't volunteer an
                 email — never make one up.
+            service: appointment reason or service, e.g. dental cleaning.
         """
         # booking.booking imports booking.client which pulls google-api-
         # python-client at module load (~50MB). Keep it lazy so businesses
@@ -2284,8 +2366,21 @@ class Receptionist(Agent):
             SlotNoLongerAvailableError, book_appointment as _book,
         )
 
-        if self.config.calendar is None or not self.config.calendar.enabled:
-            return "Calendar booking is not enabled for this business."
+        calendar_cfg = (
+            self.config.calendar
+            if self.config.calendar is not None and self.config.calendar.enabled
+            else None
+        )
+        crm_cfg = (
+            self.config.crm
+            if self.config.crm is not None
+            and self.config.crm.enabled
+            and self.config.crm.appointments_enabled
+            else None
+        )
+        appointment_cfg = calendar_cfg or crm_cfg
+        if appointment_cfg is None:
+            return "Appointment booking is not enabled for this business."
 
         # Enforce "must check before book" — slot must have been offered
         if not self._slot_was_offered(proposed_start_iso):
@@ -2302,6 +2397,7 @@ class Receptionist(Agent):
         callback_number = _cap("callback_number", callback_number, call_id=call_id) or ""
         notes = _cap("notes", notes, call_id=call_id)
         caller_email = _cap("caller_email", caller_email, call_id=call_id)
+        service = _cap("service", service, call_id=call_id) or "Appointment"
 
         # Light email-shape validation. Google rejects malformed emails too,
         # but catching obvious mishearings here gives a friendlier error.
@@ -2318,11 +2414,63 @@ class Receptionist(Agent):
         # Reconstruct the matching SlotProposal. We trust start_iso and compute
         # the end from appointment_duration_minutes (slots have uniform duration).
         start = datetime.fromisoformat(proposed_start_iso)
-        duration = timedelta(minutes=self.config.calendar.appointment_duration_minutes)
+        duration = timedelta(minutes=appointment_cfg.appointment_duration_minutes)
         slot = SlotProposal(
             start_iso=proposed_start_iso,
             end_iso=(start + duration).isoformat(),
         )
+
+        if crm_cfg is not None and calendar_cfg is None:
+            from receptionist.crm import (
+                CRMIdentityError,
+                CRMSlotUnavailableError,
+            )
+
+            try:
+                crm_client = await self._get_crm_client_async()
+                result = await crm_client.create_appointment(
+                    caller_name=caller_name,
+                    callback_number=callback_number,
+                    start=start,
+                    notes=notes,
+                    caller_email=caller_email,
+                    service=service,
+                )
+            except CRMSlotUnavailableError:
+                return (
+                    "That time was just taken. Please call check_availability "
+                    "again before offering another time."
+                )
+            except CRMIdentityError:
+                logger.info("book_appointment: CRM identity mismatch")
+                return (
+                    "I couldn't safely match that name and callback number in "
+                    "the CRM. Please verify both, or offer to take a message."
+                )
+            except Exception:
+                logger.exception("book_appointment: EspoCRM error")
+                return (
+                    "I had trouble saving the appointment in the CRM. Can I "
+                    "take a message so the office can confirm it?"
+                )
+
+            self.lifecycle.record_appointment_booked({
+                "event_id": result.event_id,
+                "start_iso": result.start_iso,
+                "end_iso": result.end_iso,
+                "html_link": result.html_link,
+                "provider": "espocrm",
+            })
+            confirmed = datetime.fromisoformat(result.start_iso)
+            email_msg = (
+                f" I saved the contact email as {caller_email}."
+                if caller_email else ""
+            )
+            return (
+                f"The appointment is confirmed for "
+                f"{_format_friendly_date(confirmed)}.{email_msg} "
+                f"CRM appointment ID: {result.event_id}."
+            )
 
         try:
             client = await self._get_calendar_client_async()
@@ -2340,14 +2488,14 @@ class Receptionist(Agent):
             # Slot just got taken. Find fresh alternatives.
             tz = ZoneInfo(self.config.business.timezone)
             now = datetime.now(tz)
-            earliest = now + timedelta(hours=self.config.calendar.earliest_booking_hours_ahead)
-            latest = now + timedelta(days=self.config.calendar.booking_window_days)
+            earliest = now + timedelta(hours=calendar_cfg.earliest_booking_hours_ahead)
+            latest = now + timedelta(days=calendar_cfg.booking_window_days)
             try:
                 busy = await client.free_busy(earliest, latest)
                 alternates = find_slots(
                     business_hours=self.config.hours,
                     business_timezone=self.config.business.timezone,
-                    calendar_config=self.config.calendar,
+                    calendar_config=calendar_cfg,
                     preferred_dt=start,
                     existing_busy=busy,
                     earliest=earliest,
@@ -2403,6 +2551,213 @@ class Receptionist(Agent):
         return (
             f"You're all set for {_format_friendly_date(confirmed)}.{invite_msg} "
             f"Someone will contact you at {callback_number} if we need to confirm."
+        )
+
+    @function_tool()
+    async def find_appointments(
+        self,
+        ctx: RunContext,
+        caller_name: str,
+        callback_number: str,
+    ) -> str:
+        """Find planned CRM appointments after verifying name and phone.
+
+        Use this before reprogramming or cancelling. Never reveal appointment
+        details unless both caller_name and callback_number match one CRM contact.
+        """
+        crm = self.config.crm
+        if (
+            crm is None
+            or not crm.enabled
+            or not crm.appointments_enabled
+        ):
+            return "CRM appointment management is not enabled."
+        call_id = self.lifecycle.metadata.call_id
+        caller_name = _cap("caller_name", caller_name, call_id=call_id) or ""
+        callback_number = _cap(
+            "callback_number", callback_number, call_id=call_id
+        ) or ""
+        try:
+            client = await self._get_crm_client_async()
+            contact = await client.find_contact(caller_name, callback_number)
+            if contact is None:
+                return (
+                    "No CRM contact matched both the caller's full name and "
+                    "callback number. Verify both values before trying again."
+                )
+            appointments = await client.appointments_for_contact(contact.id)
+        except Exception:
+            logger.exception("find_appointments: EspoCRM error")
+            return (
+                "I couldn't safely retrieve appointments from the CRM. "
+                "Offer to take a message for the office."
+            )
+        if not appointments:
+            return "The verified contact has no planned appointments."
+        tz = ZoneInfo(self.config.business.timezone)
+        lines = [
+            (
+                f"- {_format_friendly_date(item.start.astimezone(tz))}; "
+                f"{item.name}; CRM appointment ID: {item.id}"
+            )
+            for item in appointments
+        ]
+        return (
+            "Planned appointments for the verified contact:\n"
+            + "\n".join(lines)
+        )
+
+    @function_tool()
+    async def reschedule_appointment(
+        self,
+        ctx: RunContext,
+        appointment_id: str,
+        caller_name: str,
+        callback_number: str,
+        proposed_start_iso: str,
+        confirmed: bool = False,
+    ) -> str:
+        """Reschedule a verified CRM appointment to a previously offered slot.
+
+        Args:
+            appointment_id: exact CRM ID returned by find_appointments.
+            caller_name: full name used to verify the CRM contact.
+            callback_number: phone number used to verify the CRM contact.
+            proposed_start_iso: exact iso value returned by check_availability.
+            confirmed: true only after the caller explicitly confirms the new time.
+        """
+        if not confirmed:
+            return (
+                "Do not reprogram yet. Read the exact new time to the caller "
+                "and wait for an explicit confirmation."
+            )
+        if not self._slot_was_offered(proposed_start_iso):
+            return (
+                "That time has not been verified. Call check_availability "
+                "before reprogramming."
+            )
+        crm = self.config.crm
+        if (
+            crm is None
+            or not crm.enabled
+            or not crm.appointments_enabled
+        ):
+            return "CRM appointment management is not enabled."
+        call_id = self.lifecycle.metadata.call_id
+        appointment_id = _cap(
+            "appointment_id", appointment_id, call_id=call_id
+        ) or ""
+        caller_name = _cap("caller_name", caller_name, call_id=call_id) or ""
+        callback_number = _cap(
+            "callback_number", callback_number, call_id=call_id
+        ) or ""
+        try:
+            new_start = datetime.fromisoformat(proposed_start_iso)
+            if new_start.tzinfo is None:
+                return "The proposed appointment time must include a timezone."
+            client = await self._get_crm_client_async()
+            contact = await client.find_contact(caller_name, callback_number)
+            if contact is None:
+                return (
+                    "The name and callback number did not match a CRM contact. "
+                    "No appointment was changed."
+                )
+            updated = await client.reschedule_appointment(
+                appointment_id=appointment_id,
+                contact_id=contact.id,
+                new_start=new_start,
+            )
+        except Exception:
+            logger.exception("reschedule_appointment: EspoCRM error")
+            return (
+                "I couldn't reprogram the appointment safely. No change was "
+                "confirmed; offer to take a message for the office."
+            )
+        self.lifecycle.record_appointment_rescheduled({
+            "event_id": updated.id,
+            "start_iso": updated.start.isoformat(),
+            "end_iso": updated.end.isoformat(),
+            "provider": "espocrm",
+        })
+        local_start = updated.start.astimezone(
+            ZoneInfo(self.config.business.timezone)
+        )
+        return (
+            f"The appointment was reprogrammed successfully for "
+            f"{_format_friendly_date(local_start)}. CRM appointment ID: "
+            f"{updated.id}."
+        )
+
+    @function_tool()
+    async def cancel_appointment(
+        self,
+        ctx: RunContext,
+        appointment_id: str,
+        caller_name: str,
+        callback_number: str,
+        confirmed: bool = False,
+        reason: str | None = None,
+    ) -> str:
+        """Cancel a verified CRM appointment after explicit confirmation.
+
+        Args:
+            appointment_id: exact CRM ID returned by find_appointments.
+            caller_name: full name used to verify the CRM contact.
+            callback_number: phone number used to verify the CRM contact.
+            confirmed: true only after the caller explicitly confirms cancellation.
+            reason: optional short reason supplied by the caller.
+        """
+        if not confirmed:
+            return (
+                "Do not cancel yet. State the exact appointment and wait for "
+                "the caller's explicit confirmation."
+            )
+        crm = self.config.crm
+        if (
+            crm is None
+            or not crm.enabled
+            or not crm.appointments_enabled
+        ):
+            return "CRM appointment management is not enabled."
+        call_id = self.lifecycle.metadata.call_id
+        appointment_id = _cap(
+            "appointment_id", appointment_id, call_id=call_id
+        ) or ""
+        caller_name = _cap("caller_name", caller_name, call_id=call_id) or ""
+        callback_number = _cap(
+            "callback_number", callback_number, call_id=call_id
+        ) or ""
+        reason = _cap(
+            "cancellation_reason", reason, call_id=call_id
+        )
+        try:
+            client = await self._get_crm_client_async()
+            contact = await client.find_contact(caller_name, callback_number)
+            if contact is None:
+                return (
+                    "The name and callback number did not match a CRM contact. "
+                    "No appointment was cancelled."
+                )
+            cancelled = await client.cancel_appointment(
+                appointment_id=appointment_id,
+                contact_id=contact.id,
+                reason=reason,
+            )
+        except Exception:
+            logger.exception("cancel_appointment: EspoCRM error")
+            return (
+                "I couldn't cancel the appointment safely. No cancellation "
+                "was confirmed; offer to take a message for the office."
+            )
+        self.lifecycle.record_appointment_cancelled({
+            "event_id": cancelled.id,
+            "start_iso": cancelled.start.isoformat(),
+            "end_iso": cancelled.end.isoformat(),
+            "provider": "espocrm",
+        })
+        return (
+            "The appointment was cancelled successfully. "
+            f"CRM appointment ID: {cancelled.id}."
         )
 
 
@@ -2476,11 +2831,10 @@ async def handle_call(ctx: agents.JobContext):
         )
 
     idle_cfg = config.voice.idle
-    realtime_kwargs = _build_realtime_model_kwargs(
-        config.voice, api_key=await resolve_voice_bearer_async(config.voice.auth),
+    realtime_model = _build_realtime_model(
+        config.voice,
+        api_key=await resolve_voice_bearer_async(config.voice.auth),
     )
-    realtime_model = openai.realtime.RealtimeModel(**realtime_kwargs)
-    _apply_realtime_options(realtime_model, config.voice)
     session = AgentSession(
         llm=realtime_model,
         # Issue #11: feed the silence-hangup `away_seconds` into LiveKit's
@@ -2742,18 +3096,22 @@ async def handle_call(ctx: agents.JobContext):
         ),
     )
     _bc("session_start_returned", lifecycle.metadata.call_id)
-    try:
-        await _refresh_realtime_tools(
-            receptionist, call_id=lifecycle.metadata.call_id,
-        )
-    except Exception as exc:
-        _bc(f"refresh_realtime_tools_raised:{type(exc).__name__}:{exc!r}",
-            lifecycle.metadata.call_id)
-        logger.error(
-            "handle_call: _refresh_realtime_tools raised; call will proceed "
-            "with whatever tool registry OpenAI established during session.start",
-            extra={"call_id": lifecycle.metadata.call_id, "component": "agent.setup"},
-        )
+    # OpenAI accepts a defensive post-start tool refresh. Gemini 3.1 registers
+    # the full tool list during session.start but does not apply mid-session
+    # tool updates, so skip the unsupported refresh for Google.
+    if config.voice.provider == "openai":
+        try:
+            await _refresh_realtime_tools(
+                receptionist, call_id=lifecycle.metadata.call_id,
+            )
+        except Exception as exc:
+            _bc(f"refresh_realtime_tools_raised:{type(exc).__name__}:{exc!r}",
+                lifecycle.metadata.call_id)
+            logger.error(
+                "handle_call: _refresh_realtime_tools raised; call will proceed "
+                "with the tool registry established during session.start",
+                extra={"call_id": lifecycle.metadata.call_id, "component": "agent.setup"},
+            )
     _bc("setup_complete", lifecycle.metadata.call_id)
 
 

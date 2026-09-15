@@ -161,6 +161,19 @@ def test_lifecycle_appointment_booked_bool_mirrors_outcomes(config):
     )
 
 
+def test_lifecycle_records_crm_appointment_changes(config):
+    lifecycle = CallLifecycle(config=config, call_id="r", caller_phone=None)
+    moved = {"event_id": "m1", "start_iso": "new"}
+    lifecycle.record_appointment_rescheduled(moved)
+    assert "appointment_rescheduled" in lifecycle.metadata.outcomes
+    assert lifecycle.metadata.appointment_details == moved
+
+    cancelled = {"event_id": "m1", "status": "Not Held"}
+    lifecycle.record_appointment_cancelled(cancelled)
+    assert "appointment_cancelled" in lifecycle.metadata.outcomes
+    assert lifecycle.metadata.appointment_details == cancelled
+
+
 def test_outcomes_is_a_set_not_a_string(config):
     """Regression guard against reverting to the old priority-based single-outcome shape."""
     lifecycle = CallLifecycle(config=config, call_id="r", caller_phone=None)

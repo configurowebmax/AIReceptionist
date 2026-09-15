@@ -17,6 +17,8 @@ _OUTCOME_LABELS = {
     "message_taken": "Message taken",
     "transferred": "Transferred",
     "appointment_booked": "Appointment booked",
+    "appointment_rescheduled": "Appointment rescheduled",
+    "appointment_cancelled": "Appointment cancelled",
     "agent_ended": "Agent ended",
     "intake_submitted": "Intake submitted",
 }

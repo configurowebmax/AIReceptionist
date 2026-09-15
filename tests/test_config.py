@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 from pydantic import ValidationError
-from receptionist.config import BusinessConfig, load_config
+from receptionist.config import BusinessConfig, VoiceConfig, load_config
 
 
 EXAMPLE_YAML = """
@@ -977,6 +977,31 @@ messages:
 
 
 # ---- ConfigError + friendly YAML error tests (issue #8) ----
+
+
+def test_google_voice_provider_applies_gemini_defaults():
+    voice = VoiceConfig(provider="google")
+    assert voice.provider == "google"
+    assert voice.model == "gemini-3.1-flash-live-preview"
+    assert voice.voice_id == "Puck"
+
+
+def test_google_api_key_auth_defaults_to_google_env():
+    voice = VoiceConfig(provider="google", auth={"type": "api_key"})
+    assert voice.auth.env == "GOOGLE_API_KEY"
+
+
+def test_google_voice_rejects_openai_oauth():
+    with pytest.raises(ValueError, match="only supports voice.auth.type: api_key"):
+        VoiceConfig(
+            provider="google",
+            auth={"type": "oauth_static", "token": "not-a-google-key"},
+        )
+
+
+def test_google_voice_rejects_openai_reasoning_option():
+    with pytest.raises(ValueError, match="OpenAI-specific"):
+        VoiceConfig(provider="google", reasoning_effort="low")
 
 # Minimal YAML that loads cleanly when the SECTION marker has correct indent.
 # Used by the indent-trap tests below — they slot in different SECTION lines

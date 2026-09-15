@@ -603,6 +603,30 @@ def test_tool_contract_raises_when_enabled_info_packet_tool_is_missing(caplog):
     assert any("send_info_packet" in record.getMessage() for record in caplog.records)
 
 
+def test_tool_contract_requires_complete_enabled_crm_appointment_tools(caplog):
+    config = SimpleNamespace(
+        intakes=SimpleNamespace(enabled=False),
+        info_packets=SimpleNamespace(enabled=False),
+        crm=SimpleNamespace(enabled=True, appointments_enabled=True),
+    )
+    receptionist = SimpleNamespace(
+        config=config,
+        tools=[
+            SimpleNamespace(id="check_availability"),
+            SimpleNamespace(id="book_appointment"),
+            SimpleNamespace(id="find_appointments"),
+            SimpleNamespace(id="reschedule_appointment"),
+        ],
+    )
+    verify = getattr(agent_module, "_verify_tool_contract", lambda *args, **kwargs: None)
+
+    with caplog.at_level(logging.ERROR, logger="receptionist"):
+        with pytest.raises(RuntimeError, match="missing required tools"):
+            verify(receptionist, call_id="call-1")
+
+    assert any("cancel_appointment" in record.getMessage() for record in caplog.records)
+
+
 # ---- _get_caller_identity / _get_caller_phone room-level tests ----
 
 
@@ -732,6 +756,7 @@ def test_offered_slots_size_bounded_under_long_call():
 from receptionist.config import VoiceConfig
 from receptionist.agent import (
     _apply_realtime_options,
+    _build_realtime_model,
     _build_realtime_model_kwargs,
 )
 
@@ -752,6 +777,45 @@ def test_realtime_kwargs_includes_reasoning_when_set():
     )
     kwargs = _build_realtime_model_kwargs(voice, api_key="sk-test")
     assert kwargs["reasoning"].effort == "low"
+
+
+def test_google_realtime_kwargs_map_token_limit():
+    voice = VoiceConfig(
+        provider="google",
+        voice_id="Puck",
+        model="gemini-3.1-flash-live-preview",
+        max_response_output_tokens=1200,
+    )
+    kwargs = _build_realtime_model_kwargs(voice, api_key="google-test")
+    assert kwargs == {
+        "model": "gemini-3.1-flash-live-preview",
+        "voice": "Puck",
+        "api_key": "google-test",
+        "max_output_tokens": 1200,
+    }
+
+
+def test_google_realtime_kwargs_omit_missing_key_for_env_fallback():
+    voice = VoiceConfig(provider="google")
+    kwargs = _build_realtime_model_kwargs(voice, api_key=None)
+    assert "api_key" not in kwargs
+
+
+def test_build_realtime_model_selects_google(monkeypatch):
+    captured = {}
+
+    class FakeGoogleModel:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "receptionist.agent.google.realtime.RealtimeModel", FakeGoogleModel,
+    )
+    voice = VoiceConfig(provider="google")
+    model = _build_realtime_model(voice, api_key="google-test")
+    assert isinstance(model, FakeGoogleModel)
+    assert captured["model"] == "gemini-3.1-flash-live-preview"
+    assert captured["voice"] == "Puck"
 
 
 class _FakeRealtimeModelWithUpdate:

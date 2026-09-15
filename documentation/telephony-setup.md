@@ -4,7 +4,8 @@ This guide covers the three realistic ways a public phone number ends up
 ringing the AIReceptionist agent. Pick one based on what you already have.
 
 > **Status note** — Paths A and B are exercised by the project's own
-> deployments and the [RingCentral + Twilio guide](ringcentral-setup.md).
+> deployments, the [RingCentral + Twilio guide](ringcentral-setup.md), and
+> the [Netelip + LiveKit guide](netelip-livekit-setup.md).
 > Path C (keep-the-landline + FXS gateway + on-premise PBX) is documented
 > here as a conceptual pattern with a starter Asterisk snippet, but the
 > project does not currently smoke-test FXS-gateway hardware in CI.
@@ -41,7 +42,7 @@ Caller's phone
     |
     v
 +--------------------+
-|  Number provider   |   Twilio / Telnyx / RingCentral / your local carrier
+|  Number provider   |   Twilio / Telnyx / Netelip / your local carrier
 |  (owns the DID)    |
 +--------------------+
     |   SIP INVITE
@@ -83,7 +84,7 @@ Telnyx as the equivalent alternative.
 ### Setup at a glance
 
 1. Pick a SIP trunking provider (Twilio Elastic SIP Trunking, Telnyx,
-   Signalwire, Plivo, Bandwidth, Vonage, ...).
+   Netelip, Signalwire, Plivo, Bandwidth, Vonage, ...).
 2. Port your existing phone number to that provider, OR buy a new DID
    from them.
 3. Create an outbound SIP trunk in their dashboard.
@@ -121,6 +122,7 @@ Telnyx as the equivalent alternative.
 
 - [Deployment Guide → SIP Trunk Setup](deployment-guide.md#sip-trunk-setup)
 - [RingCentral + Twilio Setup](ringcentral-setup.md)
+- [Netelip + LiveKit Setup](netelip-livekit-setup.md)
 - [LiveKit SIP trunk setup](https://docs.livekit.io/telephony/start/sip-trunk-setup/)
 
 ---

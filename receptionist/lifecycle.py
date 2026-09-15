@@ -148,6 +148,16 @@ class CallLifecycle:
         self.metadata.appointment_details = details
         self._add_outcome("appointment_booked")
 
+    def record_appointment_rescheduled(self, details: dict) -> None:
+        """Record a successful appointment reprogramming operation."""
+        self.metadata.appointment_details = details
+        self._add_outcome("appointment_rescheduled")
+
+    def record_appointment_cancelled(self, details: dict) -> None:
+        """Record a successful appointment cancellation operation."""
+        self.metadata.appointment_details = details
+        self._add_outcome("appointment_cancelled")
+
     def record_agent_ended(self, reason: str) -> None:
         """Called when the agent itself decides to end the call (issues #10/#11).
 

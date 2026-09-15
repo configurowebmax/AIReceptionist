@@ -248,17 +248,34 @@ agent:
 
 ### voice
 
-Voice configuration for the OpenAI Realtime API.
+Voice configuration for Google Gemini Live or the OpenAI Realtime API.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `voice_id` | string | No | `"marin"` | The OpenAI voice to use for the receptionist. |
-| `model` | string | No | `"gpt-realtime"` | The OpenAI Realtime (GA) model variant to use. |
+| `provider` | string | No | `"openai"` | `"google"` for Gemini Live or `"openai"` for OpenAI Realtime. The checked-in dental example explicitly selects Google. |
+| `voice_id` | string | No | provider-specific | `"Puck"` for Google, `"marin"` for OpenAI. |
+| `model` | string | No | provider-specific | `"gemini-3.1-flash-live-preview"` for Google, `"gpt-realtime"` for OpenAI. |
 | `auth` | object | No | omitted | Per-business auth source for Realtime. If omitted, the LiveKit OpenAI plugin uses `OPENAI_API_KEY` exactly as before. **GA Realtime requires a standard `sk-` API key**; ChatGPT/Codex OAuth (`oauth_codex`) no longer authenticates Realtime as of the 2026-06-03 beta sunset. |
 | `reasoning_effort` | string or null | No | `null` | Reasoning effort for reasoning-capable Realtime models (`gpt-realtime-2`). One of `minimal`, `low`, `medium`, `high`. OpenAI recommends `low` for production voice latency. Leave `null` for non-reasoning models. Only applied when the installed `livekit-plugins-openai` (>= 1.6) exposes the `reasoning` parameter; ignored with a warning otherwise. |
 | `max_response_output_tokens` | int or null | No | `null` | Hard cap on tokens per model response. A finite cap protects against a runaway response exhausting the account's per-minute token rate limit — the cause of mid-call dead air on rate-limited OpenAI tiers. Leave `null` for the model default. |
 
-**Available models** (GA Realtime):
+**Google Gemini Live example**:
+
+```yaml
+voice:
+  provider: "google"
+  voice_id: "Puck"
+  model: "gemini-3.1-flash-live-preview"
+  auth:
+    type: "api_key"
+    env: "GOOGLE_API_KEY"
+```
+
+For Google, `auth` supports API keys only. If `auth` is omitted, the Google
+plugin reads `GOOGLE_API_KEY` directly. `reasoning_effort` is OpenAI-specific;
+`max_response_output_tokens` maps to Gemini's `max_output_tokens`.
+
+**Available OpenAI models** (GA Realtime):
 
 | Model | Description |
 |-------|-------------|
@@ -472,6 +489,40 @@ unproductive_turns_exhausted | max_duration_reached>"`. See
 for the full vocabulary.
 
 ---
+
+### crm
+
+Optional EspoCRM knowledge and appointment integration.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `provider` | string | No | `"espocrm"` | CRM adapter. |
+| `enabled` | bool | Yes | `false` | Enables CRM tools. |
+| `base_url` | string | Yes | `"http://localhost:8080"` | EspoCRM site URL without credentials or query parameters. |
+| `account_name` | string | For appointments | none | Unique EspoCRM Account used to isolate meetings for this business. |
+| `knowledge_enabled` | bool | No | `true` | Searches published Knowledge Base articles from `lookup_faq`. |
+| `appointments_enabled` | bool | No | `true` | Enables availability, booking, lookup, reprogramming, and cancellation. |
+| `appointment_duration_minutes` | int | No | `45` | Duration assigned to new appointments. |
+| `buffer_minutes` | int | No | `0` | Buffer applied around planned meetings. |
+| `booking_window_days` | int | No | `30` | Maximum future booking window. |
+| `earliest_booking_hours_ahead` | int | No | `2` | Minimum advance notice. |
+| `auth` | object | Yes | none | `api_key` (recommended) or `basic` (local demo only). |
+
+```yaml
+crm:
+  provider: "espocrm"
+  enabled: true
+  base_url: "https://crm.example.com"
+  account_name: "Example Clinic"
+  auth:
+    type: "api_key"
+    api_key_env: "ESPOCRM_API_KEY"
+```
+
+API keys and passwords are read only from the named environment variable.
+Appointment lookup requires an exact normalized match of full name and phone.
+Cancellation changes the Meeting status to `Not Held`; it does not delete the
+record. Both reprogramming and cancellation require explicit confirmation.
 
 ### languages
 
