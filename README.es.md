@@ -1,9 +1,17 @@
 # Recepcionista IA con LiveKit, Gemini y EspoCRM
 
-Esta edicion extiende AI Receptionist para convertirlo en una recepcionista
-telefonica conectada a un CRM real. Atiende llamadas en tiempo real, responde
-preguntas desde la base de conocimiento de EspoCRM y administra el ciclo
-completo de las citas: crear, consultar, reprogramar y cancelar.
+<p align="center">
+  <img src="assets/readme/ai-receptionist-configuroweb.jpeg"
+       alt="AIReceptionist Open Source: tu propia recepcionista IA"
+       width="100%">
+</p>
+
+Esta edicion, preparada por
+[ConfiguroWeb](https://configuroweb.com/), extiende AI Receptionist para
+convertirlo en una recepcionista telefonica conectada a un CRM real. Atiende
+llamadas en tiempo real, responde preguntas desde la base de conocimiento de
+EspoCRM y administra el ciclo completo de las citas: crear, consultar,
+reprogramar y cancelar.
 
 La configuracion de demostracion representa una clinica dental ficticia en
 espanol. No contiene claves, telefonos privados ni datos de pacientes reales.
